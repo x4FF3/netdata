@@ -1,5 +1,10 @@
 #include "common.h"
 
+#ifdef __FreeBSD__
+#    define O_NOATIME     0
+#    define MADV_DONTFORK INHERIT_NONE
+#endif /* __FreeBSD__ */
+
 char *global_host_prefix = "";
 int enable_ksm = 1;
 
@@ -192,27 +197,22 @@ void freez(void *ptr) {
     free(ptr);
 }
 
-// ----------------------------------------------------------------------------
-// time functions
+void json_escape_string(char *dst, const char *src, size_t size) {
+    const char *t;
+    char *d = dst, *e = &dst[size - 1];
 
-inline unsigned long long timeval_usec(struct timeval *tv) {
-    return tv->tv_sec * 1000000ULL + tv->tv_usec;
+    for(t = src; *t && d < e ;t++) {
+        if(unlikely(*t == '\\' || *t == '"')) {
+            if(unlikely(d + 1 >= e)) break;
+            *d++ = '\\';
+        }
+        *d++ = *t;
+    }
+
+    *d = '\0';
 }
 
-// time(NULL) in nanoseconds
-inline unsigned long long time_usec(void) {
-    struct timeval now;
-    gettimeofday(&now, NULL);
-    return timeval_usec(&now);
-}
-
-inline unsigned long long usec_dt(struct timeval *now, struct timeval *old) {
-    unsigned long long tv1 = timeval_usec(now);
-    unsigned long long tv2 = timeval_usec(old);
-    return (tv1 > tv2) ? (tv1 - tv2) : (tv2 - tv1);
-}
-
-int sleep_usec(unsigned long long usec) {
+int sleep_usec(usec_t usec) {
 
 #ifndef NETDATA_WITH_USLEEP
     // we expect microseconds (1.000.000 per second)
@@ -224,7 +224,7 @@ int sleep_usec(unsigned long long usec) {
 
     while (nanosleep(&req, &rem) == -1) {
         if (likely(errno == EINTR)) {
-            info("nanosleep() interrupted (while sleeping for %llu microseconds).", usec);
+            debug(D_SYSTEM, "nanosleep() interrupted (while sleeping for %llu microseconds).", usec);
             req.tv_sec = rem.tv_sec;
             req.tv_nsec = rem.tv_nsec;
         } else {
@@ -864,11 +864,9 @@ uint32_t simple_hash(const char *name) {
 */
 
 void strreverse(char *begin, char *end) {
-    char aux;
-
     while (end > begin) {
         // clearer code.
-        aux = *end;
+        char aux = *end;
         *end-- = *begin;
         *begin++ = aux;
     }
@@ -905,11 +903,10 @@ void *mymmap(const char *filename, size_t size, int flags, int ksm) {
 #ifdef MADV_MERGEABLE
     static int log_madvise_2 = 1, log_madvise_3 = 1;
 #endif
-    int fd;
     void *mem = NULL;
 
     errno = 0;
-    fd = open(filename, O_RDWR | O_CREAT | O_NOATIME, 0664);
+    int fd = open(filename, O_RDWR | O_CREAT | O_NOATIME, 0664);
     if (fd != -1) {
         if (lseek(fd, size, SEEK_SET) == (off_t) size) {
             if (write(fd, "", 1) == 1) {
@@ -1028,7 +1025,11 @@ int fd_is_valid(int fd) {
 }
 
 pid_t gettid(void) {
+#ifdef __FreeBSD__
+    return (pid_t)pthread_getthreadid_np();
+#else
     return (pid_t)syscall(SYS_gettid);
+#endif /* __FreeBSD__ */
 }
 
 char *fgets_trim_len(char *buf, size_t buf_size, FILE *fp, size_t *len) {
@@ -1090,14 +1091,12 @@ int snprintfz(char *dst, size_t n, const char *fmt, ...) {
 
 int processors = 1;
 long get_system_cpus(void) {
-    procfile *ff = NULL;
-
     processors = 1;
 
     char filename[FILENAME_MAX + 1];
     snprintfz(filename, FILENAME_MAX, "%s/proc/stat", global_host_prefix);
 
-    ff = procfile_open(filename, NULL, PROCFILE_FLAG_DEFAULT);
+    procfile *ff = procfile_open(filename, NULL, PROCFILE_FLAG_DEFAULT);
     if(!ff) {
         error("Cannot open file '%s'. Assuming system has %d processors.", filename, processors);
         return processors;
@@ -1121,17 +1120,15 @@ long get_system_cpus(void) {
 
     procfile_close(ff);
 
-    info("System has %d processors.", processors);
+    debug(D_SYSTEM, "System has %d processors.", processors);
     return processors;
 }
 
 pid_t pid_max = 32768;
 pid_t get_system_pid_max(void) {
-    procfile *ff = NULL;
-
     char filename[FILENAME_MAX + 1];
     snprintfz(filename, FILENAME_MAX, "%s/proc/sys/kernel/pid_max", global_host_prefix);
-    ff = procfile_open(filename, NULL, PROCFILE_FLAG_DEFAULT);
+    procfile *ff = procfile_open(filename, NULL, PROCFILE_FLAG_DEFAULT);
     if(!ff) {
         error("Cannot open file '%s'. Assuming system supports %d pids.", filename, pid_max);
         return pid_max;
@@ -1152,7 +1149,7 @@ pid_t get_system_pid_max(void) {
     }
 
     procfile_close(ff);
-    info("System supports %d pids.", pid_max);
+    debug(D_SYSTEM, "System supports %d pids.", pid_max);
     return pid_max;
 }
 

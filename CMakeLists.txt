@@ -14,14 +14,24 @@ set(NETDATA_SOURCE_FILES
         src/appconfig.h
         src/avl.c
         src/avl.h
+        src/backends.c
+        src/backends.h
+        src/clocks.c
+        src/clocks.h
         src/common.c
         src/common.h
         src/daemon.c
         src/daemon.h
         src/dictionary.c
         src/dictionary.h
+        src/eval.c
+        src/eval.h
         src/global_statistics.c
         src/global_statistics.h
+        src/health.c
+        src/health.h
+        src/ipc.c
+        src/ipc.h
         src/log.c
         src/log.h
         src/main.c
@@ -53,9 +63,9 @@ set(NETDATA_SOURCE_FILES
         src/proc_net_rpc_nfsd.c
         src/proc_net_snmp6.c
         src/proc_net_snmp.c
+        src/proc_net_softnet_stat.c
         src/proc_net_stat_conntrack.c
         src/proc_net_stat_synproxy.c
-        src/proc_net_softnet_stat.c
         src/proc_self_mountinfo.c
         src/proc_self_mountinfo.h
         src/proc_softirqs.c
@@ -70,8 +80,8 @@ set(NETDATA_SOURCE_FILES
         src/rrd.h
         src/storage_number.c
         src/storage_number.h
-        src/sys_kernel_mm_ksm.c
         src/sys_fs_cgroup.c
+        src/sys_kernel_mm_ksm.c
         src/unit_test.c
         src/unit_test.h
         src/url.c
@@ -84,7 +94,7 @@ set(NETDATA_SOURCE_FILES
         src/web_client.h
         src/web_server.c
         src/web_server.h
-        config.h src/health.h src/health.c src/eval.h src/eval.c)
+)
 
 set(APPS_PLUGIN_SOURCE_FILES
         src/appconfig.c

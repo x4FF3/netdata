@@ -364,7 +364,7 @@
             width: 233px !important;
         }
     }
-    
+
     @media (min-width: 1360px) {
         .container {
             padding-left: 3% !important;
@@ -399,7 +399,7 @@
 
     // enable registry updates
     var netdataRegistry = true;
-    
+
     // --------------------------------------------------------------------
     // urlOptions
 
@@ -496,7 +496,7 @@
 
     // --------------------------------------------------------------------
     // check options that should be processed before loading netdata.js
-    
+
     function loadLocalStorage(name) {
         var ret = null;
 
@@ -637,7 +637,7 @@
         gotoServerInit();
     };
 
-    var this_is_demo = null;
+    var this_is_demo = null; // FIXME
     function isdemo() {
         if(this_is_demo !== null) return this_is_demo;
         this_is_demo = false;
@@ -697,7 +697,7 @@
 
         else if(document.location.toString().startsWith('https://') && url.toString().startsWith('http://'))
             error = 'can\'t check';
-        
+
         var finalURL = netdataURL(url);
 
         setTimeout(function() {
@@ -1018,6 +1018,13 @@
                 return '';
         },
 
+        contextValueRange: function(id) {
+            if(typeof netdataDashboard.context[id] !== 'undefined' && typeof netdataDashboard.context[id].valueRange !== 'undefined')
+                return netdataDashboard.context[id].valueRange;
+            else
+                return '[null, null]';
+        },
+
         contextHeight: function(id, def) {
             if(typeof netdataDashboard.context[id] !== 'undefined' && typeof netdataDashboard.context[id].height !== 'undefined')
                 return def * netdataDashboard.context[id].height;
@@ -1050,6 +1057,9 @@
 
             case 'apache':
             case 'exim':
+            case 'dovecot':
+            case 'hddtemp':
+            case 'ipfs':
             case 'memcached':
             case 'mysql':
             case 'named':
@@ -1057,12 +1067,12 @@
             case 'nut':
             case 'phpfpm':
             case 'postfix':
+            case 'postgres':
             case 'redis':
             case 'retroshare':
-            case 'ipfs':
             case 'smawebbox':
-            case 'squid':
             case 'snmp':
+            case 'squid':
             case 'tomcat':
                 chart.menu = chart.type;
                 chart.menu_pattern = tmp;
@@ -1107,10 +1117,10 @@
 
         if(typeof charts['system.swap'] !== 'undefined')
             head += '<div style="margin-right: 10px;" data-netdata="system.swap"'
-            + ' data-dimensions="free"'
+            + ' data-dimensions="used"'
             + ' data-append-options="percentage"'
             + ' data-chart-library="easypiechart"'
-            + ' data-title="Free Swap"'
+            + ' data-title="Used Swap"'
             + ' data-units="%"'
             + ' data-easypiechart-max-value="100"'
             + ' data-width="8%"'
@@ -1201,10 +1211,10 @@
 
         if(typeof charts['system.ram'] !== 'undefined')
             head += '<div style="margin-right: 10px;" data-netdata="system.ram"'
-            + ' data-dimensions="cached|free"'
+            + ' data-dimensions="used|buffers|active|wired"' // active and wired are FreeBSD stats
             + ' data-append-options="percentage"'
             + ' data-chart-library="easypiechart"'
-            + ' data-title="Available RAM"'
+            + ' data-title="Used RAM"'
             + ' data-units="%"'
             + ' data-easypiechart-max-value="100"'
             + ' data-width="8%"'
@@ -1296,6 +1306,7 @@
                     chtml += netdataDashboard.contextInfo(chart.context) + '<div id="chart_' + NETDATA.name2id(chart.id) + '" data-netdata="' + chart.id + '"'
                         + ' data-width="' + pcent_width.toString() + '%"'
                         + ' data-height="' + netdataDashboard.contextHeight(chart.context, options.chartsHeight).toString() + 'px"'
+                        + ' data-dygraph-valuerange="' + netdataDashboard.contextValueRange(chart.context) + '"'
                         + ' data-before="0"'
                         + ' data-after="-' + duration.toString() + '"'
                         + ' data-id="' + NETDATA.name2id(options.hostname + '/' + chart.id) + '"'
@@ -1314,6 +1325,9 @@
             html += mhead + shtml + '</div></div><hr role="separator"/>';
         }
 
+        sidebar += '<li class="" style="padding-top:15px;"><a href="https://github.com/firehol/netdata/wiki/Add-more-charts-to-netdata" target="_blank"><i class="fa fa-plus" aria-hidden="true"></i> add more charts</a></li>';
+        sidebar += '<li class=""><a href="https://github.com/firehol/netdata/wiki/Add-more-alarms-to-netdata" target="_blank"><i class="fa fa-plus" aria-hidden="true"></i> add more alarms</a></li>';
+        sidebar += '<li class="" style="margin:20px;color:#666;"><small>netdata on <b>' + data.hostname.toString() + '</b>, collects every ' + ((data.update_every == 1)?'second':data.update_every.toString() + ' seconds') + ' <b>' + data.dimensions_count.toLocaleString() + '</b> metrics, presented as <b>' + data.charts_count.toLocaleString() + '</b> charts and monitored by <b>' + data.alarms_count.toLocaleString() + '</b> alarms, using ' + Math.round(data.rrd_memory_bytes / 1024 / 1024).toLocaleString() + ' MB of memory for ' + Math.round(data.history / 3600).toLocaleString() + ' ' + ((data.history == 3600)?'hour':'hours').toString() + ' of real-time history.</small></li>';
         sidebar += '</ul>';
         div.innerHTML = html;
         document.getElementById('sidebar').innerHTML = sidebar;
@@ -1426,7 +1440,17 @@
                 return;
             }
 
+            function alarmid4human(id) {
+                if(id === 0)
+                    return '-';
+
+                return id.toString();
+            }
+
             function timestamp4human(timestamp, space) {
+                if(timestamp === 0)
+                    return '-';
+
                 if(typeof space === 'undefined')
                     space = '&nbsp;';
 
@@ -1482,7 +1506,7 @@
                 seconds -= (minutes * 60);
 
                 var txt = '';
-                
+
                 if(hours > 1) txt += hours.toString() + options.space + options.hours;
                 else if(hours === 1) txt += hours.toString() + options.space + options.hour;
 
@@ -1583,7 +1607,7 @@
             }
 
             // find the proper family of each alarm
-            var now = new Date().getTime();
+            var now = Date.now();
             var x;
             var count_active = 0;
             var count_all = 0;
@@ -1738,15 +1762,19 @@
                             title: 'Event Date',
                             valign: 'middle',
                             titleTooltip: 'The date and time the even took place',
-                            switchable: false,
-                            sortable: true,
                             formatter: function(value, row, index) { return timestamp4human(value, ' '); },
+                            align: 'center',
+                            valign: 'middle',
+                            switchable: false,
+                            sortable: true
                         },
                         {
                             field: 'hostname',
                             title: 'Host',
                             valign: 'middle',
                             titleTooltip: 'The host that generated this event',
+                            align: 'center',
+                            valign: 'middle',
                             visible: false,
                             sortable: true
                         },
@@ -1754,6 +1782,8 @@
                             field: 'unique_id',
                             title: 'Unique ID',
                             titleTooltip: 'The host unique ID for this event',
+                            formatter: function(value, row, index) { return alarmid4human(value); },
+                            align: 'center',
                             valign: 'middle',
                             visible: false,
                             sortable: true
@@ -1762,6 +1792,8 @@
                             field: 'alarm_id',
                             title: 'Alarm ID',
                             titleTooltip: 'The ID of the alarm that generated this event',
+                            formatter: function(value, row, index) { return alarmid4human(value); },
+                            align: 'center',
                             valign: 'middle',
                             visible: false,
                             sortable: true
@@ -1770,6 +1802,8 @@
                             field: 'alarm_event_id',
                             title: 'Alarm Event ID',
                             titleTooltip: 'The incremental ID of this event for the given alarm',
+                            formatter: function(value, row, index) { return alarmid4human(value); },
+                            align: 'center',
                             valign: 'middle',
                             visible: false,
                             sortable: true
@@ -1778,6 +1812,7 @@
                             field: 'chart',
                             title: 'Chart',
                             titleTooltip: 'The chart the alarm is attached to',
+                            align: 'center',
                             valign: 'middle',
                             switchable: false,
                             sortable: true
@@ -1786,6 +1821,7 @@
                             field: 'family',
                             title: 'Family',
                             titleTooltip: 'The family of the chart the alarm is attached to',
+                            align: 'center',
                             valign: 'middle',
                             visible: false,
                             sortable: true
@@ -1797,6 +1833,7 @@
                             formatter: function(value, row, index) {
                                 return value.toString().replace(/_/g, ' ');
                             },
+                            align: 'center',
                             valign: 'middle',
                             switchable: false,
                             sortable: true
@@ -1805,6 +1842,10 @@
                             field: 'old_value',
                             title: 'Old Value',
                             titleTooltip: 'The value of the alarm, just before this event',
+                            formatter: function(value, row, index) {
+                                return ((value !== null)?Math.round(value * 100) / 100:'NaN').toString();
+                            },
+                            align: 'center',
                             valign: 'middle',
                             visible: false,
                             sortable: true
@@ -1814,7 +1855,7 @@
                             title: 'Value',
                             titleTooltip: 'The value of the alarm, that triggered this event',
                             formatter: function(value, row, index) {
-                                return ((value !== null)?Math.floor(value):'NaN').toString();
+                                return ((value !== null)?Math.round(value * 100) / 100:'NaN').toString();
                             },
                             align: 'right',
                             valign: 'middle',
@@ -1824,6 +1865,7 @@
                             field: 'units',
                             title: 'Units',
                             titleTooltip: 'The units of the value of the alarm',
+                            align: 'left',
                             valign: 'middle',
                             sortable: true
                         },
@@ -1831,6 +1873,7 @@
                             field: 'old_status',
                             title: 'Old Status',
                             titleTooltip: 'The status of the alarm, just before this event',
+                            align: 'center',
                             valign: 'middle',
                             visible: false,
                             sortable: true
@@ -1839,6 +1882,7 @@
                             field: 'status',
                             title: 'Status',
                             titleTooltip: 'The status of the alarm, that was set due to this event',
+                            align: 'center',
                             valign: 'middle',
                             switchable: false,
                             sortable: true
@@ -1848,6 +1892,7 @@
                             title: 'Last Duration',
                             titleTooltip: 'The duration the alarm was at its previous state, just before this event',
                             formatter: function(value, row, index) { return seconds4human(value, { negative_suffix: '', space: ' ', now: 'no time' }); },
+                            align: 'center',
                             valign: 'middle',
                             visible: false,
                             sortable: true
@@ -1857,6 +1902,7 @@
                             title: 'Raised Duration',
                             titleTooltip: 'The duration the alarm was raised, just before this event',
                             formatter: function(value, row, index) { return seconds4human(value, { negative_suffix: '', space: ' ', now: 'no time' }); },
+                            align: 'center',
                             valign: 'middle',
                             visible: false,
                             sortable: true
@@ -1865,6 +1911,7 @@
                             field: 'recipient',
                             title: 'Recipient',
                             titleTooltip: 'The recipient of this event',
+                            align: 'center',
                             valign: 'middle',
                             visible: false,
                             sortable: true
@@ -1873,6 +1920,13 @@
                             field: 'processed',
                             title: 'Processed Status',
                             titleTooltip: 'True when this event is processed',
+                            formatter: function(value, row, index) {
+                                if(value === true)
+                                    return 'DONE';
+                                else
+                                    return 'PENDING';
+                            },
+                            align: 'center',
                             valign: 'middle',
                             visible: false,
                             sortable: true
@@ -1881,6 +1935,13 @@
                             field: 'updated',
                             title: 'Updated Status',
                             titleTooltip: 'True when this event has been updated by another event',
+                            formatter: function(value, row, index) {
+                                if(value === true)
+                                    return 'UPDATED';
+                                else
+                                    return 'CURRENT';
+                            },
+                            align: 'center',
                             valign: 'middle',
                             visible: false,
                             sortable: true
@@ -1889,6 +1950,8 @@
                             field: 'updated_by_id',
                             title: 'Updated By ID',
                             titleTooltip: 'The unique ID of the event that obsoleted this one',
+                            formatter: function(value, row, index) { return alarmid4human(value); },
+                            align: 'center',
                             valign: 'middle',
                             visible: false,
                             sortable: true
@@ -1897,6 +1960,8 @@
                             field: 'updates_id',
                             title: 'Updates ID',
                             titleTooltip: 'The unique ID of the event obsoleted because of this event',
+                            formatter: function(value, row, index) { return alarmid4human(value); },
+                            align: 'center',
                             valign: 'middle',
                             visible: false,
                             sortable: true
@@ -1905,6 +1970,7 @@
                             field: 'exec',
                             title: 'Script',
                             titleTooltip: 'The script to handle the event notification',
+                            align: 'center',
                             valign: 'middle',
                             visible: false,
                             sortable: true
@@ -1914,6 +1980,7 @@
                             title: 'Script Run At',
                             titleTooltip: 'The date and time the script has been ran',
                             formatter: function(value, row, index) { return timestamp4human(value, ' '); },
+                            align: 'center',
                             valign: 'middle',
                             visible: false,
                             sortable: true
@@ -1922,6 +1989,13 @@
                             field: 'exec_code',
                             title: 'Script Return Value',
                             titleTooltip: 'The return code of the script',
+                            formatter: function(value, row, index) {
+                                if(value === 0)
+                                    return 'OK (returned 0)';
+                                else
+                                    return 'FAILED (with code ' + value.toString() + ')';
+                            },
+                            align: 'center',
                             valign: 'middle',
                             visible: false,
                             sortable: true
@@ -1931,6 +2005,7 @@
                             title: 'Script Delay',
                             titleTooltip: 'The hysteresis of the notification',
                             formatter: function(value, row, index) { return seconds4human(value, { negative_suffix: '', space: ' ', now: 'no time' }); },
+                            align: 'center',
                             valign: 'middle',
                             visible: false,
                             sortable: true
@@ -1940,6 +2015,7 @@
                             title: 'Script Delay Run At',
                             titleTooltip: 'The date and time the script should be run, after hysteresis',
                             formatter: function(value, row, index) { return timestamp4human(value, ' '); },
+                            align: 'center',
                             valign: 'middle',
                             visible: false,
                             sortable: true
@@ -1948,6 +2024,7 @@
                             field: 'info',
                             title: 'Description',
                             titleTooltip: 'A short description of the alarm',
+                            align: 'center',
                             valign: 'middle',
                             visible: false,
                             sortable: true
@@ -1956,6 +2033,7 @@
                             field: 'source',
                             title: 'Alarm Source',
                             titleTooltip: 'The source of configuration of the alarm',
+                            align: 'center',
                             valign: 'middle',
                             visible: false,
                             sortable: true
@@ -2091,7 +2169,7 @@
     function notifyForUpdate(force) {
         versionLog('<p>checking for updates...</p>');
 
-        var now = new Date().getTime();
+        var now = Date.now();
 
         if(typeof force === 'undefined' || force !== true) {
             var last = loadLocalStorage('last_update_check');
@@ -2433,6 +2511,9 @@
         });
 
         if(isdemo()) {
+            // do not to give errors on netdata demo servers for 60 seconds
+            NETDATA.options.current.retries_on_data_failures = 60;
+
             if(urlOptions.nowelcome !== true) {
                 setTimeout(function() {
                     $('#welcomeModal').modal();
@@ -2482,7 +2563,7 @@
         });
 
         NETDATA.requiredJs.push({
-            url: NETDATA.serverDefault + 'dashboard_info.js?v20161002-1',
+            url: NETDATA.serverDefault + 'dashboard_info.js?v20161112-6',
             async: false,
             isAlreadyLoaded: function() { return false; }
         });
@@ -2664,28 +2745,43 @@
             <div class="modal-content">
                 <div class="modal-header">
                     <button type="button" class="close" data-dismiss="modal" aria-label="Close"><span aria-hidden="true">&times;</span></button>
-                    <h4 class="modal-title" id="welcomeModalLabel">Welcome!</h4>
+                    <h4 class="modal-title" id="welcomeModalLabel">Welcome to the world of netdata</h4>
                 </div>
                 <div class="modal-body">
-                        <div class="p">
-                        <b><a href="https://github.com/firehol/netdata/wiki" target="_blank">netdata</a></b> is the fastest way to visualize metrics. It is a resource efficient, highly optimized system for collecting and visualizing any type of real-time time series data, from CPU usage, disk activity, SQL queries, API calls, web site visitors, etc.
+                    <div class="p">
+                        <div style="width: 100%; text-align: center; padding-top: 10px; padding-bottom: 10px; font-size: 18px;">
+                            if there is a metric for something, we want it visualised<br/>
+                            and we want this visualisation to be <strong>real-time</strong>, <strong>efficient</strong> and <strong>awesome</strong>
                         </div>
-                        <div class="p">
-                        <b><a href="https://github.com/firehol/netdata/wiki" target="_blank">netdata</a></b> tries to visualize the truth of <b>now</b>, in its <b>greatest detail</b>, so that you can get insights of what is happening now and what just happened, on your systems and applications.
-                        </div>
-                        <div class="p">
-                        To make a chart in <b><a href="https://github.com/firehol/netdata/wiki" target="_blank">netdata</a></b>, you just need a <b>number</b>. Just a number you can read somehow. <b><a href="https://github.com/firehol/netdata/wiki" target="_blank">netdata</a></b> will turn this number to a real time, interactive, web chart. For collecting these numbers, it supports <a href="https://github.com/firehol/netdata/wiki/External-Plugins" target="_blank">external plugins</a>, even <a href="https://github.com/firehol/netdata/wiki/General-Info---charts.d" target="_blank">shell</a> or <a href="https://github.com/firehol/netdata/wiki/General-Info---charts.d" target="_blank">node.js</a> plugins. Any computer program, in any language, that can print a few lines of text on its standard output, can be a netdata data collector.
-                        </div>
-                        <div class="p">
-                        <b><a href="https://github.com/firehol/netdata/wiki" target="_blank">netdata</a></b> can embed charts everywhere, like this one <div data-netdata="system.cpu" data-dimensions="system" data-after="-120" data-width="25%" data-height="15px" data-chart-library="dygraph" data-dygraph-theme="sparkline" data-show-value-of-system-at="system.cpu.system.modal.1"></div> (my CPU system usage which is <span id="system.cpu.system.modal.1" style="display: inline-block; width: 40px; text-align: right;"></span>%),
-                        or this one <div data-netdata="ipv4.tcppackets" data-dimensions="received" data-after="-120" data-width="25%" data-height="15px" data-chart-library="dygraph" data-dygraph-theme="sparkline" data-show-value-of-received-at="ipv4.tcppackets.received.modal.1"></div> (my IPv4 received TCP packets, which are <span id="ipv4.tcppackets.received.modal.1" style="display: inline-block; width: 60px; text-align: right;"></span>/second).
-                        </div>
-                        <div class="p">
-                        You can have <b><a href="https://github.com/firehol/netdata/wiki" target="_blank">netdata</a></b> charts on your site too. Just give it a <code>div</code> and a real time chart, zoomable and draggable will appear (try it even on these tiny ones - <b>drag</b> them to pan horizontally, <b>shift + drag</b> to zoom in, on <b>chrome shift + mouse wheel</b> to zoom in/out, <b>double click</b> on them to reset them - don't be afraid of <b><a href="https://github.com/firehol/netdata/wiki" target="_blank">netdata</a></b> performance - <a href="https://github.com/firehol/netdata/wiki/Performance" target="_blank">a raspberry pi 2 can sustain 300 charts updates per second</a>!).
-                        </div>
-                        <div class="p">
-                        For more information please refer to the <b><a href="https://github.com/firehol/netdata/wiki" target="_blank">netdata wiki</a></b>.
-                        </div>
+                    </div>
+                    <div class="p">
+                        <b><a href="https://github.com/firehol/netdata/wiki" target="_blank">netdata</a></b>
+                        is a new way to monitor your systems and applications, to get <strong>real-time insights</strong>
+                        of what is really happening and what affects performance.
+                        It is carefully optimised to be a real-time system, without interfering in any way,
+                        to the core function of your systems.
+                    </div>
+                    <div class="p">
+                        <b><a href="https://github.com/firehol/netdata/wiki" target="_blank">netdata</a></b>
+                        has been designed to monitor <strong>massive amounts of metrics, per server, per second</strong>.
+                        When installed, it might come up with 1k to 3k metrics, but we have been testing it with 100k
+                        metrics, all collected per second, and still the cpu utilisation remained negligible.
+                        <br/>
+                        We have also tried to give each metric, a meaning, a context.
+                        We have grouped and categorized all metrics into meaningful charts, providing a
+                        better understanding of the underlying technologies and mechanisms.
+                    </div>
+                    <div class="p">
+                        <b><a href="https://github.com/firehol/netdata/wiki" target="_blank">netdata</a></b> is free,
+                        open-source software. If you decide to use it,
+                        <strong><a href="https://github.com/firehol/netdata/wiki/a-github-star-is-important" target="_blank">it is important to give netdata a star at GitHub</a></strong>.
+                    </div>
+                    <div class="p">
+                        Enjoy real-time performance monitoring!
+                    </div>
+                    <div class="p">
+                        Costa Tsaousis
+                    </div>
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-default" data-dismiss="modal">Close</button>
@@ -2746,7 +2842,7 @@
                             </div>
                             <hr/>
                             <div class="p">
-                                <h4>SHIFT + Mouse Wheel <small>(does not work on firefox and IE/Edge)</small></h4>
+                                <h4>SHIFT + Mouse Wheel</h4>
                                 While pressing the shift key and the mouse pointer is over the contents of a chart, scroll the mouse wheel to zoom in or out. This kind of zooming is aligned to center below the mouse pointer. The other charts will follow too.
                                 <br/>
                                 Once a chart is zoomed, auto refreshing stops for all charts. To enable it again, <b>double click</b> a zoomed chart.
@@ -2907,23 +3003,13 @@
                                         <td class="option-info"><strong>Which chart refresh policy to use?</strong><br/>
                                             <small>When set to <b>parallel</b>, visible charts are refreshed in parallel (all queries are sent to netdata server in parallel) and are rendered asynchronously. When set to <b>sequential</b> charts are refreshed one after another. Set it to parallel if your browser can cope with it (most modern browsers do), set it to sequential if you work on an older/slower computer.</small>
                                         </td>
-                                        </tr>
+                                    </tr>
                                     <tr class="option-row" id="concurrent_refreshes_row">
-                                        <td class="option-control"></td>
-                                        <td class="option-info">
-                                            <table>
-                                            <tr class="option-row">
-                                            <td class="option-control">
-                                            <input id="concurrent_refreshes" type="checkbox" checked data-toggle="toggle" data-on="Resync" data-off="Best Effort" data-width="110px">
-                                            </td>
-                                            <td class="option-info">
-                                            <strong>Shall we re-sync chart refreshes?</strong><br/>
+                                        <td class="option-control"><input id="concurrent_refreshes" type="checkbox" checked data-toggle="toggle" data-on="Resync" data-off="Best Effort" data-width="110px"></td>
+                                        <td class="option-info"><strong>Shall we re-sync chart refreshes?</strong><br/>
                                             <small>When set to <b>Resync</b>, the dashboard will attempt to re-synchronize all the charts so that they are refreshed concurrently. When set to <b>Best Effort</b>, each chart may be refreshed with a little time difference to the others. Normally, the dashboard starts refreshing them in parallel, but depending on the speed of your computer and the network latencies, charts start having a slight time difference. Setting this to <b>Resync</b> will attempt to re-synchronize the charts on every update. Setting it to <b>Best Effort</b> may lower the pressure on your browser and the network.</small>
-                                            </td>
-                                            </tr>
-                                            </table>
                                         </td>
-                                        </tr>
+                                    </tr>
                                     <tr class="option-row">
                                         <td class="option-control"><input id="sync_selection" type="checkbox" checked data-toggle="toggle" data-on="Sync" data-off="Don't Sync" data-onstyle="success" data-offstyle="danger" data-width="110px"></td>
                                         <td class="option-info"><strong>Sync hover selection on all charts?</strong><br/>
@@ -3102,4 +3188,4 @@
     </div>
 </body>
 </html>
-<script type="text/javascript" src="dashboard.js?v20161011-1"></script>
+<script type="text/javascript" src="dashboard.js?v20161219-1"></script>

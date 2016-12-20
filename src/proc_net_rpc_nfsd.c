@@ -209,7 +209,7 @@ struct nfsd_procs nfsd4_ops_values[] = {
 };
 
 
-int do_proc_net_rpc_nfsd(int update_every, unsigned long long dt) {
+int do_proc_net_rpc_nfsd(int update_every, usec_t dt) {
     static procfile *ff = NULL;
     static int do_rc = -1, do_fh = -1, do_io = -1, do_th = -1, do_ra = -1, do_net = -1, do_rpc = -1, do_proc2 = -1, do_proc3 = -1, do_proc4 = -1, do_proc4ops = -1;
     static int ra_warning = 0, th_warning = 0, proc2_warning = 0, proc3_warning = 0, proc4_warning = 0, proc4ops_warning = 0;
@@ -253,7 +253,6 @@ int do_proc_net_rpc_nfsd(int update_every, unsigned long long dt) {
     if(do_proc4ops) do_proc4ops = 1;
 
     uint32_t lines = procfile_lines(ff), l;
-    uint32_t words;
 
     char *type;
     unsigned long long rc_hits = 0, rc_misses = 0, rc_nocache = 0;
@@ -265,7 +264,7 @@ int do_proc_net_rpc_nfsd(int update_every, unsigned long long dt) {
     unsigned long long rpc_calls = 0, rpc_bad_format = 0, rpc_bad_auth = 0, rpc_bad_client = 0;
 
     for(l = 0; l < lines ;l++) {
-        words = procfile_linewords(ff, l);
+        uint32_t words = procfile_linewords(ff, l);
         if(!words) continue;
 
         type = procfile_lineword(ff, l, 0);

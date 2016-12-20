@@ -58,6 +58,21 @@ static void chown_open_file(int fd, uid_t uid, gid_t gid) {
     }
 }
 
+void create_needed_dir(const char *dir, uid_t uid, gid_t gid)
+{
+    // attempt to create the directory
+    if(mkdir(dir, 0755) == 0) {
+        // we created it
+
+        // chown it to match the required user
+        if(chown(dir, uid, gid) == -1)
+            error("Cannot chown directory '%s' to %u:%u", dir, (unsigned int)uid, (unsigned int)gid);
+    }
+    else if(errno != EEXIST)
+        // log an error only if the directory does not exist
+        error("Cannot create directory '%s'", dir);
+}
+
 int become_user(const char *username, int pid_fd)
 {
     struct passwd *pw = getpwnam(username);
@@ -68,6 +83,14 @@ int become_user(const char *username, int pid_fd)
 
     uid_t uid = pw->pw_uid;
     gid_t gid = pw->pw_gid;
+
+    create_needed_dir(CACHE_DIR, uid, gid);
+    create_needed_dir(VARLIB_DIR, uid, gid);
+
+    if(pidfile[0]) {
+        if(chown(pidfile, uid, gid) == -1)
+            error("Cannot chown '%s' to %u:%u", pidfile, (unsigned int)uid, (unsigned int)gid);
+    }
 
     int ngroups = (int)sysconf(_SC_NGROUPS_MAX);
     gid_t *supplementary_groups = NULL;
@@ -91,7 +114,6 @@ int become_user(const char *username, int pid_fd)
             error("Cannot set supplementary groups for user '%s'", username);
 
         freez(supplementary_groups);
-        supplementary_groups = NULL;
         ngroups = 0;
     }
 
@@ -138,7 +160,7 @@ void oom_score_adj(int score) {
     if(!done)
         error("Cannot adjust my Out-Of-Memory score to %d.", score);
     else
-        info("Adjusted my Out-Of-Memory score to %d.", score);
+        debug(D_SYSTEM, "Adjusted my Out-Of-Memory score to %d.", score);
 }
 
 int sched_setscheduler_idle(void) {
@@ -151,7 +173,7 @@ int sched_setscheduler_idle(void) {
     if(i != 0)
         error("Cannot adjust my scheduling priority to IDLE.");
     else
-        info("Adjusted my scheduling priority to IDLE.");
+        debug(D_SYSTEM, "Adjusted my scheduling priority to IDLE.");
 
     return i;
 #else
@@ -206,7 +228,7 @@ int become_daemon(int dont_fork, const char *user)
     }
 
     // Set new file permissions
-    umask(0002);
+    umask(0007);
 
     // adjust my Out-Of-Memory score
     oom_score_adj(1000);
@@ -214,20 +236,22 @@ int become_daemon(int dont_fork, const char *user)
     // never become a problem
     if(sched_setscheduler_idle() != 0) {
         if(nice(19) == -1) error("Cannot lower my CPU priority.");
-        else info("Set my nice value to 19.");
+        else debug(D_SYSTEM, "Set my nice value to 19.");
     }
 
     if(user && *user) {
         if(become_user(user, pidfd) != 0) {
             error("Cannot become user '%s'. Continuing as we are.", user);
         }
-        else info("Successfully became user '%s'.", user);
+        else debug(D_SYSTEM, "Successfully became user '%s'.", user);
+    }
+    else {
+        create_needed_dir(CACHE_DIR, getuid(), getgid());
+        create_needed_dir(VARLIB_DIR, getuid(), getgid());
     }
 
-    if(pidfd != -1) {
+    if(pidfd != -1)
         close(pidfd);
-        pidfd = -1;
-    }
 
     return(0);
 }

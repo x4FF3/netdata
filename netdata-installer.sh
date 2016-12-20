@@ -13,7 +13,13 @@ then
 fi
 
 LC_ALL=C
-umask 022
+umask 002
+
+# Be nice on production environments
+renice 19 $$ >/dev/null 2>/dev/null
+
+processors=$(cat /proc/cpuinfo  | grep ^processor | wc -l)
+[ $(( processors )) -lt 1 ] && processors=1
 
 # you can set CFLAGS before running installer
 CFLAGS="${CFLAGS--O3}"
@@ -141,7 +147,7 @@ get_git_config_signatures() {
             do
                     git checkout ${c} "conf.d/${x}" || continue
                     s="$(cat "conf.d/${x}" | md5sum | cut -d ' ' -f 1)"
-                    echo >>configs.signatures.tmp "${x}:${s}"
+                    echo >>configs.signatures.tmp "${s}:${x}"
                     echo "    ${s}"
             done
             git checkout HEAD "conf.d/${x}" || break
@@ -153,7 +159,7 @@ get_git_config_signatures() {
         {
             echo "declare -A configs_signatures=("
             IFS=":"
-            while read file md5
+            while read md5 file
             do
                 echo "  ['${md5}']='${file}'"
             done
@@ -427,7 +433,7 @@ if [ -f src/netdata ]
 fi
 
 echo >&2 "Compiling netdata ..."
-run make || exit 1
+run make -j${processors} || exit 1
 
 if [ "${BASH_VERSINFO[0]}" -ge "4" ]
 then
@@ -541,6 +547,9 @@ do
     fi
 done
 
+echo >&2 "Fixing permissions ..."
+run find ./system/ -type f -a \! -name \*.in -a \! -name Makefile\* -a \! -name \*.conf  -a \! -name \*.service -exec chmod 755 {} \;
+
 NETDATA_ADDED_TO_DOCKER=0
 if [ ${UID} -eq 0 ]
     then
@@ -555,7 +564,7 @@ if [ ${UID} -eq 0 ]
     if [ $? -ne 0 ]
         then
         echo >&2 "Adding netdata user account ..."
-        run useradd -r -g netdata -c netdata -s $(which nologin || echo '/bin/false') -d / netdata
+        run useradd -r -g netdata -c netdata -s $(which nologin 2>/dev/null || command -v nologin 2>/dev/null || echo '/bin/false') -d / netdata
     fi
 
     getent group docker > /dev/null
@@ -603,17 +612,20 @@ config_option() {
     echo "${value}"
 }
 
-# user
-defuser="netdata"
-[ ! "${UID}" = "0" ] && defuser="${USER}"
-NETDATA_USER="$( config_option "run as user" "${defuser}" )"
+# the user netdata will run as
+if [ "${UID}" = "0" ]
+    then
+    NETDATA_USER="$( config_option "run as user" "netdata" )"
+else
+    NETDATA_USER="${USER}"
+fi
 
-NETDATA_WEB_USER="$( config_option "web files owner" "${defuser}" )"
+# the owners of the web files
+NETDATA_WEB_USER="$(  config_option "web files owner" "${NETDATA_USER}" )"
 NETDATA_WEB_GROUP="$( config_option "web files group" "${NETDATA_WEB_USER}" )"
 
 # debug flags
-defdebug=0
-NETDATA_DEBUG="$( config_option "debug flags" ${defdebug} )"
+NETDATA_DEBUG="$( config_option "debug flags" 0 )"
 
 # port
 defport=19999
@@ -648,7 +660,35 @@ fi
 
 echo >&2
 echo >&2 "Fixing directories (user: ${NETDATA_USER})..."
-for x in "${NETDATA_WEB_DIR}" "${NETDATA_CONF_DIR}" "${NETDATA_CACHE_DIR}" "${NETDATA_LOG_DIR}" "${NETDATA_LIB_DIR}" "${NETDATA_CONF_DIR}/python.d" "${NETDATA_CONF_DIR}/charts.d" "${NETDATA_CONF_DIR}/node.d"
+
+# --- conf dir ----
+
+for x in "python.d" "charts.d" "node.d"
+do
+    if [ ! -d "${NETDATA_CONF_DIR}/${x}" ]
+        then
+        echo >&2 "Creating directory '${NETDATA_CONF_DIR}/${x}'"
+        run mkdir -p "${NETDATA_CONF_DIR}/${x}" || exit 1
+    fi
+done
+run chown --recursive "${NETDATA_USER}:${NETDATA_USER}" "${NETDATA_CONF_DIR}"
+run find "${NETDATA_CONF_DIR}" -type f -exec chmod 0660 {} \;
+run find "${NETDATA_CONF_DIR}" -type d -exec chmod 0775 {} \;
+
+# --- web dir ----
+
+if [ ! -d "${NETDATA_WEB_DIR}" ]
+    then
+    echo >&2 "Creating directory '${NETDATA_WEB_DIR}'"
+    run mkdir -p "${NETDATA_WEB_DIR}" || exit 1
+fi
+run chown --recursive "${NETDATA_WEB_USER}:${NETDATA_WEB_GROUP}" "${NETDATA_WEB_DIR}"
+run find "${NETDATA_WEB_DIR}" -type f -exec chmod 0664 {} \;
+run find "${NETDATA_WEB_DIR}" -type d -exec chmod 0775 {} \;
+
+# --- data dirs ----
+
+for x in "${NETDATA_LIB_DIR}" "${NETDATA_CACHE_DIR}" "${NETDATA_LOG_DIR}"
 do
     if [ ! -d "${x}" ]
         then
@@ -656,23 +696,21 @@ do
         run mkdir -p "${x}" || exit 1
     fi
 
-    if [ ${UID} -eq 0 ]
-        then
-        if [ "${x}" = "${NETDATA_WEB_DIR}" ]
-            then
-            run chown -R "${NETDATA_WEB_USER}:${NETDATA_WEB_GROUP}" "${x}" || echo >&2 "WARNING: Cannot change the ownership of the files in directory ${x} to ${NETDATA_WEB_USER}:${NETDATA_WEB_GROUP}..."
-        else
-            run chown -R "${NETDATA_USER}:${NETDATA_USER}" "${x}" || echo >&2 "WARNING: Cannot change the ownership of the files in directory ${x} to ${NETDATA_USER}..."
-        fi
-    fi
-
-    run chmod 0755 "${x}" || echo >&2 "WARNING: Cannot change the permissions of the directory ${x} to 0755..."
+    run chown --recursive "${NETDATA_USER}:${NETDATA_USER}" "${x}"
+    #run find "${x}" -type f -exec chmod 0660 {} \;
+    #run find "${x}" -type d -exec chmod 0770 {} \;
 done
+
+# --- plugins ----
 
 if [ ${UID} -eq 0 ]
     then
-    run chown root "${NETDATA_PREFIX}/usr/libexec/netdata/plugins.d/apps.plugin"
-    run chmod 0755 "${NETDATA_PREFIX}/usr/libexec/netdata/plugins.d/apps.plugin"
+    run chown --recursive root:root "${NETDATA_PREFIX}/usr/libexec/netdata"
+    run find "${NETDATA_PREFIX}/usr/libexec/netdata" -type d -exec chmod 0755 {} \;
+    run find "${NETDATA_PREFIX}/usr/libexec/netdata" -type f -exec chmod 0644 {} \;
+    run find "${NETDATA_PREFIX}/usr/libexec/netdata" -type f -a -name \*.plugin -exec chmod 0755 {} \;
+    run find "${NETDATA_PREFIX}/usr/libexec/netdata" -type f -a -name \*.sh -exec chmod 0755 {} \;
+
     run setcap cap_dac_read_search,cap_sys_ptrace+ep "${NETDATA_PREFIX}/usr/libexec/netdata/plugins.d/apps.plugin"
     if [ $? -ne 0 ]
         then
@@ -680,7 +718,17 @@ if [ ${UID} -eq 0 ]
         run chown root "${NETDATA_PREFIX}/usr/libexec/netdata/plugins.d/apps.plugin"
         run chmod 4755 "${NETDATA_PREFIX}/usr/libexec/netdata/plugins.d/apps.plugin"
     fi
+else
+    run chown --recursive "${NETDATA_USER}:${NETDATA_USER}" "${NETDATA_PREFIX}/usr/libexec/netdata"
+    run find "${NETDATA_PREFIX}/usr/libexec/netdata" -type f -exec chmod 0755 {} \;
+    run find "${NETDATA_PREFIX}/usr/libexec/netdata" -type d -exec chmod 0755 {} \;
 fi
+
+# --- fix #1292 bug ---
+
+[ -d "${NETDATA_PREFIX}/usr/libexec" ] && run chmod a+rX "${NETDATA_PREFIX}/usr/libexec"
+[ -d "${NETDATA_PREFIX}/usr/share/netdata" ] && run chmod a+rX "${NETDATA_PREFIX}/usr/share/netdata"
+
 
 # -----------------------------------------------------------------------------
 # check if we can re-start netdata
@@ -696,7 +744,7 @@ if [ ${DONOTSTART} -eq 1 ]
             then
             chown "${NETDATA_USER}" "${NETDATA_PREFIX}/etc/netdata/netdata.conf"
         fi
-        chmod 0664 "${NETDATA_PREFIX}/etc/netdata/netdata.conf"
+        chmod 0644 "${NETDATA_PREFIX}/etc/netdata/netdata.conf"
     fi
     banner "is installed now!"
     echo >&2 "  enjoy real-time performance and health monitoring..."
@@ -713,40 +761,42 @@ isnetdata() {
 }
 
 stop_netdata_on_pid() {
-    local pid="$1" ret=0 count=0
+    local pid="${1}" ret=0 count=0
 
-    isnetdata $pid || return 0
+    isnetdata ${pid} || return 0
 
-    printf >&2 "Stopping netdata on pid $pid ..."
-    while [ ! -z "$pid" -a $ret -eq 0 ]
+    printf >&2 "Stopping netdata on pid ${pid} ..."
+    while [ ! -z "$pid" -a ${ret} -eq 0 ]
     do
-        if [ $count -gt 45 ]
+        if [ ${count} -gt 45 ]
             then
-            echo >&2 "Cannot stop the running netdata on pid $pid."
+            echo >&2 "Cannot stop the running netdata on pid ${pid}."
             return 1
         fi
 
         count=$(( count + 1 ))
 
-        run kill $pid 2>/dev/null
+        run kill ${pid} 2>/dev/null
         ret=$?
 
-        test $ret -eq 0 && printf >&2 "." && sleep 2
+        test ${ret} -eq 0 && printf >&2 "." && sleep 2
     done
 
     echo >&2
-    if [ $ret -eq 0 ]
+    if [ ${ret} -eq 0 ]
     then
-        echo >&2 "SORRY! CANNOT STOP netdata ON PID $pid !"
+        echo >&2 "SORRY! CANNOT STOP netdata ON PID ${pid} !"
         return 1
     fi
 
-    echo >&2 "netdata on pid $pid stopped."
+    echo >&2 "netdata on pid ${pid} stopped."
     return 0
 }
 
 stop_all_netdata() {
-    local p
+    local p myns ns
+
+    myns="$(readlink /proc/self/ns/pid 2>/dev/null)"
 
     echo >&2 "Stopping a (possibly) running netdata..."
 
@@ -755,25 +805,91 @@ stop_all_netdata() {
         $(cat /var/run/netdata/netdata.pid 2>/dev/null) \
         $(pidof netdata 2>/dev/null)
     do
-        stop_netdata_on_pid $p
+        ns="$(readlink /proc/${p}/ns/pid 2>/dev/null)"
+
+        if [ -z "${myns}" -o -z "${ns}" -o "${myns}" = "${ns}" ]
+            then
+            stop_netdata_on_pid ${p}
+        fi
     done
 }
 
 # -----------------------------------------------------------------------------
-# check netdata for systemd
+# check for systemd
 
 issystemd() {
+    local pids p myns ns systemctl
+
     # if the directory /etc/systemd/system does not exit, it is not systemd
     [ ! -d /etc/systemd/system ] && return 1
+
+    # if there is no systemctl command, it is not systemd
+    systemctl=$(which systemctl 2>/dev/null || command -v systemctl 2>/dev/null)
+    [ -z "${systemctl}" -o ! -x "${systemctl}" ] && return 1
 
     # if pid 1 is systemd, it is systemd
     [ "$(basename $(readlink /proc/1/exe) 2>/dev/null)" = "systemd" ] && return 0
 
-    # if systemd is running, it is systemd
-    pidof systemd >/dev/null 2>&1 && return 0
+    # if systemd is not running, it is not systemd
+    pids=$(pidof systemd 2>/dev/null)
+    [ -z "${pids}" ] && return 1
+
+    # check if the running systemd processes are not in our namespace
+    myns="$(readlink /proc/self/ns/pid 2>/dev/null)"
+    for p in ${pids}
+    do
+        ns="$(readlink /proc/${p}/ns/pid 2>/dev/null)"
+
+        # if pid of systemd is in our namespace, it is systemd
+        [ ! -z "${myns}" && "${myns}" = "${ns}" ] && return 0
+    done
 
     # else, it is not systemd
     return 1
+}
+
+installed_init_d=0
+install_non_systemd_init() {
+    [ "${UID}" != 0 ] && return 1
+
+    local key="unknown"
+    if [ -f /etc/os-release ]
+        then
+        source /etc/os-release || return 1
+        key="${ID}-${VERSION_ID}"
+
+    elif [ -f /etc/centos-release ]
+        then
+        key=$(</etc/centos-release)
+    fi
+
+    if [ -d /etc/init.d -a ! -f /etc/init.d/netdata ]
+        then
+        if [ "${key}" = "gentoo" ]
+            then
+            run cp system/netdata-openrc /etc/init.d/netdata && \
+            run chmod 755 /etc/init.d/netdata && \
+            run rc-update add netdata default && \
+            installed_init_d=1
+        
+        elif [ "${key}" = "ubuntu-12.04" -o "${key}" = "ubuntu-14.04" -o "${key}" = "debian-7" ]
+            then
+            run cp system/netdata-lsb /etc/init.d/netdata && \
+            run chmod 755 /etc/init.d/netdata && \
+            run update-rc.d netdata defaults && \
+            run update-rc.d netdata enable && \
+            installed_init_d=1
+
+        elif [ "${key}" = "CentOS release 6.8 (Final)" ]
+            then
+            run cp system/netdata-init-d /etc/init.d/netdata && \
+            run chmod 755 /etc/init.d/netdata && \
+            run chkconfig netdata on && \
+            installed_init_d=1
+        fi
+    fi
+
+    return 0
 }
 
 started=0
@@ -796,6 +912,8 @@ if [ "${UID}" -eq 0 ]
 
         stop_all_netdata
         service netdata restart && started=1
+    else
+        install_non_systemd_init
     fi
 
     if [ ${started} -eq 0 ]
@@ -854,13 +972,13 @@ if [ ! -s "${NETDATA_PREFIX}/etc/netdata/netdata.conf" ]
     ret=$?
 
     # try curl
-    if [ $ret -ne 0 -o ! -s "${NETDATA_PREFIX}/etc/netdata/netdata.conf.new" ]
+    if [ ${ret} -ne 0 -o ! -s "${NETDATA_PREFIX}/etc/netdata/netdata.conf.new" ]
         then
         curl -s -o "${NETDATA_PREFIX}/etc/netdata/netdata.conf.new" "http://localhost:${NETDATA_PORT}/netdata.conf"
         ret=$?
     fi
 
-    if [ $ret -eq 0 -a -s "${NETDATA_PREFIX}/etc/netdata/netdata.conf.new" ]
+    if [ ${ret} -eq 0 -a -s "${NETDATA_PREFIX}/etc/netdata/netdata.conf.new" ]
         then
         mv "${NETDATA_PREFIX}/etc/netdata/netdata.conf.new" "${NETDATA_PREFIX}/etc/netdata/netdata.conf"
         echo >&2 "New configuration saved for you to edit at ${NETDATA_PREFIX}/etc/netdata/netdata.conf"
@@ -1038,6 +1156,12 @@ if [ -f /etc/systemd/system/netdata.service ]
     then
     echo "Deleting /etc/systemd/system/netdata.service ..."
     rm -i /etc/systemd/system/netdata.service
+fi
+
+if [ -f /etc/init.d/netdata ]
+    then
+    echo "Deleting /etc/init.d/netdata ..."
+    rm -i /etc/init.d/netdata
 fi
 
 getent passwd netdata > /dev/null

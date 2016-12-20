@@ -125,12 +125,12 @@
 
     NETDATA.themes = {
         white: {
-            bootstrap_css: NETDATA.serverDefault + 'css/bootstrap-3.3.7.min.css',
+            bootstrap_css: NETDATA.serverDefault + 'css/bootstrap-3.3.7.css',
             dashboard_css: NETDATA.serverDefault + 'dashboard.css?v20161002-1',
             background: '#FFFFFF',
             foreground: '#000000',
-            grid: '#DDDDDD',
-            axis: '#CCCCCC',
+            grid: '#F0F0F0',
+            axis: '#F0F0F0',
             colors: [   '#3366CC', '#DC3912',   '#109618', '#FF9900',   '#990099', '#DD4477',
                         '#3B3EAC', '#66AA00',   '#0099C6', '#B82E2E',   '#AAAA11', '#5574A6',
                         '#994499', '#22AA99',   '#6633CC', '#E67300',   '#316395', '#8B0707',
@@ -142,12 +142,12 @@
             gauge_gradient: false
         },
         slate: {
-            bootstrap_css: NETDATA.serverDefault + 'css/bootstrap.slate.min.css?v20161002-1',
-            dashboard_css: NETDATA.serverDefault + 'dashboard.slate.css?v20161002-1',
+            bootstrap_css: NETDATA.serverDefault + 'css/bootstrap-slate-flat-3.3.7.css?v20161218-2',
+            dashboard_css: NETDATA.serverDefault + 'dashboard.slate.css?v20161218-1',
             background: '#272b30',
             foreground: '#C8C8C8',
-            grid: '#35393e',
-            axis: '#35393e',
+            grid: '#283236',
+            axis: '#283236',
 /*          colors: [   '#55bb33', '#ff2222',   '#0099C6', '#faa11b',   '#adbce0', '#DDDD00',
                         '#4178ba', '#f58122',   '#a5cc39', '#f58667',   '#f5ef89', '#cf93c0',
                         '#a5d18a', '#b8539d',   '#3954a3', '#c8a9cf',   '#c7de8a', '#fad20a',
@@ -249,7 +249,7 @@
                                         // rendering the chart that is panned or zoomed).
                                         // Used with .current.global_pan_sync_time
 
-        last_resized: new Date().getTime(), // the timestamp of the last resize request
+        last_resized: Date.now(),       // the timestamp of the last resize request
 
         last_page_scroll: 0,            // the timestamp the last time the page was scrolled
 
@@ -331,6 +331,8 @@
             abort_ajax_on_scroll: false,            // kill pending ajax page scroll
             async_on_scroll: false,                 // sync/async onscroll handler
             onscroll_worker_duration_threshold: 30, // time in ms, to consider slow the onscroll handler
+
+            retries_on_data_failures: 3, // how many retries to make if we can't fetch chart data from the server
 
             setOptionCallback: function() { ; }
         },
@@ -501,7 +503,7 @@
         console.log('welcome to NETDATA');
 
     NETDATA.onresize = function() {
-        NETDATA.options.last_resized = new Date().getTime();
+        NETDATA.options.last_resized = Date.now();
         NETDATA.onscroll();
     };
 
@@ -514,7 +516,7 @@
     NETDATA.onscroll_updater = function() {
         NETDATA.onscroll_updater_running = true;
         NETDATA.onscroll_updater_count++;
-        var start = new Date().getTime();
+        var start = Date.now();
 
         var targets = NETDATA.options.targets;
         var len = targets.length;
@@ -546,7 +548,7 @@
                 targets[len].isVisible();
         }
 
-        var end = new Date().getTime();
+        var end = Date.now();
         // console.log('scroll No ' + NETDATA.onscroll_updater_count + ' calculation took ' + (end - start).toString() + ' ms');
 
         if(NETDATA.options.current.async_on_scroll === false) {
@@ -574,7 +576,7 @@
     NETDATA.onscroll = function() {
         // console.log('onscroll');
 
-        NETDATA.options.last_page_scroll = new Date().getTime();
+        NETDATA.options.last_page_scroll = Date.now();
         NETDATA.options.auto_refresher_stop_until = 0;
 
         if(NETDATA.options.targets === null) return;
@@ -641,7 +643,7 @@
     NETDATA.error = function(code, msg) {
         NETDATA.errorLast.code = code;
         NETDATA.errorLast.message = msg;
-        NETDATA.errorLast.datetime = new Date().getTime();
+        NETDATA.errorLast.datetime = Date.now();
 
         console.log("ERROR " + code + ": " + NETDATA.errorCodes[code].message + ": " + msg);
 
@@ -658,6 +660,119 @@
         NETDATA.errorLast.code = 0;
         NETDATA.errorLast.message = "You are doing fine!";
         NETDATA.errorLast.datetime = 0;
+    };
+
+    // ----------------------------------------------------------------------------------------------------------------
+    // commonMin & commonMax
+
+    NETDATA.commonMin = {
+        keys: {},
+        latest: {},
+
+        get: function(state) {
+            if(typeof state.__commonMin === 'undefined') {
+                // get the commonMin setting
+                var self = $(state.element);
+                state.__commonMin = self.data('common-min') || null;
+            }
+
+            var min = state.data.min;
+            var name = state.__commonMin;
+
+            if(name === null) {
+                // we don't need commonMin
+                //state.log('no need for commonMin');
+                return min;
+            }
+
+            var t = this.keys[name];
+            if(typeof t === 'undefined') {
+                // add our commonMin
+                this.keys[name] = {};
+                t = this.keys[name];
+            }
+
+            var uuid = state.uuid;
+            if(typeof t[uuid] !== 'undefined') {
+                if(t[uuid] === min) {
+                    //state.log('commonMin ' + state.__commonMin + ' not changed: ' + this.latest[name]);
+                    return this.latest[name];
+                }
+                else if(min < this.latest[name]) {
+                    //state.log('commonMin ' + state.__commonMin + ' increased: ' + min);
+                    t[uuid] = min;
+                    this.latest[name] = min;
+                    return min;
+                }
+            }
+
+            // add our min
+            t[uuid] = min;
+
+            // find the common min
+            var m = min;
+            for(var i in t)
+                if(t[i] < m) m = t[i];
+
+            //state.log('commonMin ' + state.__commonMin + ' updated: ' + m);
+            this.latest[name] = m;
+            return m;
+        }
+    };
+
+    NETDATA.commonMax = {
+        keys: {},
+        latest: {},
+
+        get: function(state) {
+            if(typeof state.__commonMax === 'undefined') {
+                // get the commonMax setting
+                var self = $(state.element);
+                state.__commonMax = self.data('common-max') || null;
+            }
+
+            var max = state.data.max;
+            var name = state.__commonMax;
+
+            if(name === null) {
+                // we don't need commonMax
+                //state.log('no need for commonMax');
+                return max;
+            }
+
+            var t = this.keys[name];
+            if(typeof t === 'undefined') {
+                // add our commonMax
+                this.keys[name] = {};
+                t = this.keys[name];
+            }
+
+            var uuid = state.uuid;
+            if(typeof t[uuid] !== 'undefined') {
+                if(t[uuid] === max) {
+                    //state.log('commonMax ' + state.__commonMax + ' not changed: ' + this.latest[name]);
+                    return this.latest[name];
+                }
+                else if(max > this.latest[name]) {
+                    //state.log('commonMax ' + state.__commonMax + ' increased: ' + max);
+                    t[uuid] = max;
+                    this.latest[name] = max;
+                    return max;
+                }
+            }
+
+            // add our max
+            t[uuid] = max;
+
+            // find the common max
+            var m = max;
+            for(var i in t)
+                if(t[i] > m) m = t[i];
+
+            //state.log('commonMax ' + state.__commonMax + ' updated: ' + m);
+            this.latest[name] = m;
+            return m;
+        }
     };
 
     // ----------------------------------------------------------------------------------------------------------------
@@ -764,7 +879,7 @@
             if(this.master !== null && this.master !== state)
                 this.master.resetChart(true, true);
 
-            var now = new Date().getTime();
+            var now = Date.now();
             this.master = state;
             this.seq = now;
             this.force_after_ms = after;
@@ -1118,6 +1233,9 @@
         // the chart library requested by the user
         this.library_name = self.data('chart-library') || NETDATA.chartDefaults.library;
 
+        // how many retries we have made to load chart data from the server
+        this.retries_on_data_failures = 0;
+
         // object - the chart library used
         this.library = null;
 
@@ -1149,7 +1267,8 @@
 
         this.title = self.data('title') || null;    // the title of the chart
         this.units = self.data('units') || null;    // the units of the chart dimensions
-        this.append_options = self.data('append-options') || null;  // the units of the chart dimensions
+        this.append_options = self.data('append-options') || null;  // additional options to pass to netdata
+        this.override_options = self.data('override-options') || null;  // override options to pass to netdata
 
         this.running = false;                       // boolean - true when the chart is being refreshed now
         this.validated = false;                     // boolean - has the chart been validated?
@@ -1165,6 +1284,16 @@
         this.requested_padding = null;
         this.view_after = 0;
         this.view_before = 0;
+
+        this.value_decimal_detail = -1;
+        {
+            var d = self.data('decimal-digits');
+            if(typeof d === 'number') {
+                this.value_decimal_detail = 1;
+                while(d-- > 0)
+                    this.value_decimal_detail *= 10;
+            }
+        }
 
         this.auto = {
             name: 'auto',
@@ -1285,7 +1414,7 @@
             if(NETDATA.chartDefaults.min_width !== null)
                 $(that.element).css('min-width', NETDATA.chartDefaults.min_width);
 
-            that.tm.last_dom_created = new Date().getTime();
+            that.tm.last_dom_created = Date.now();
 
             showLoading();
         };
@@ -1330,7 +1459,7 @@
             that.data_before = 0;           // milliseconds - the last timestamp of the data
             that.data_update_every = 0;     // milliseconds - the frequency to update the data
 
-            that.tm.last_initialized = new Date().getTime();
+            that.tm.last_initialized = Date.now();
             createDOM();
 
             that.setMode('auto');
@@ -1432,7 +1561,7 @@
                     showRendering();
                     that.element_chart.style.display = 'none';
                     if(that.element_legend !== null) that.element_legend.style.display = 'none';
-                    that.tm.last_hidden = new Date().getTime();
+                    that.tm.last_hidden = Date.now();
 
                     // de-allocate data
                     // This works, but I not sure there are no corner cases somewhere
@@ -1458,7 +1587,7 @@
                 init();
             }
             else {
-                that.tm.last_unhidden = new Date().getTime();
+                that.tm.last_unhidden = Date.now();
                 that.element_chart.style.display = '';
                 if(that.element_legend !== null) that.element_legend.style.display = '';
                 resizeChart();
@@ -1549,7 +1678,7 @@
                     maxMessageFontSize();
                 }
 
-                that.tm.last_resized = new Date().getTime();
+                that.tm.last_resized = Date.now();
             }
         };
 
@@ -1566,7 +1695,7 @@
             if(that.settings_id !== null)
                 NETDATA.localStorageSet('chart_heights.' + that.settings_id, h);
 
-            var now = new Date().getTime();
+            var now = Date.now();
             NETDATA.options.last_page_scroll = now;
             NETDATA.options.auto_refresher_stop_until = now + NETDATA.options.current.stop_updates_while_resizing;
 
@@ -1601,7 +1730,7 @@
             this.event_resize.chart_last_w = this.element.clientWidth;
             this.event_resize.chart_last_h = this.element.clientHeight;
 
-            var now = new Date().getTime();
+            var now = Date.now();
             if(now - this.event_resize.last <= NETDATA.options.current.double_click_speed) {
                 // double click / double tap event
 
@@ -1674,7 +1803,7 @@
         var noDataToShow = function() {
             showMessageIcon('<i class="fa fa-warning"></i> empty');
             that.legendUpdateDOM();
-            that.tm.last_autorefreshed = new Date().getTime();
+            that.tm.last_autorefreshed = Date.now();
             // that.data_update_every = 30 * 1000;
             //that.element_chart.style.display = 'none';
             //if(that.element_legend !== null) that.element_legend.style.display = 'none';
@@ -1704,7 +1833,7 @@
             this.current.force_before_ms = null;
             this.current.force_after_ms = null;
 
-            this.tm.last_mode_switch = new Date().getTime();
+            this.tm.last_mode_switch = Date.now();
         };
 
         // ----------------------------------------------------------------------------------------------------------------
@@ -1716,9 +1845,9 @@
                 return;
 
             if(typeof ms === 'number')
-                NETDATA.globalSelectionSync.dont_sync_before = new Date().getTime() + ms;
+                NETDATA.globalSelectionSync.dont_sync_before = Date.now() + ms;
             else
-                NETDATA.globalSelectionSync.dont_sync_before = new Date().getTime() + NETDATA.options.current.sync_selection_delay;
+                NETDATA.globalSelectionSync.dont_sync_before = Date.now() + NETDATA.options.current.sync_selection_delay;
         };
 
         // can we globally apply selection sync?
@@ -1726,7 +1855,7 @@
             if(NETDATA.options.current.sync_selection === false)
                 return false;
 
-            if(NETDATA.globalSelectionSync.dont_sync_before > new Date().getTime())
+            if(NETDATA.globalSelectionSync.dont_sync_before > Date.now())
                 return false;
 
             return true;
@@ -2041,7 +2170,7 @@
             if(this.debug === true)
                 this.log(logme + 'ACCEPTING UPDATE: current/min duration: ' + (current_duration / 1000).toString() + '/' + (this.fixed_min_duration / 1000).toString() + ', wanted duration: ' + (wanted_duration / 1000).toString() + ', duration diff: ' + (Math.round(Math.abs(current_duration - wanted_duration) / 1000)).toString() + ', movement: ' + (movement / 1000).toString() + ', tolerance: ' + (tolerance / 1000).toString() + ', returning: ' + ret);
 
-            this.current.force_update_at = new Date().getTime() + NETDATA.options.current.pan_and_zoom_delay;
+            this.current.force_update_at = Date.now() + NETDATA.options.current.pan_and_zoom_delay;
             this.current.force_after_ms = after;
             this.current.force_before_ms = before;
             NETDATA.globalPanAndZoom.setMaster(this, after, before);
@@ -2051,6 +2180,9 @@
         this.legendFormatValue = function(value) {
             if(value === null || value === 'undefined') return '-';
             if(typeof value !== 'number') return value;
+
+            if(this.value_decimal_detail !== -1)
+                return (Math.round(value * this.value_decimal_detail) / this.value_decimal_detail).toLocaleString();
 
             var abs = Math.abs(value);
             if(abs >= 1000) return (Math.round(value)).toLocaleString();
@@ -2294,10 +2426,12 @@
                 var color = state._chartDimensionColor(name);
 
                 var user_element = null;
-                var user_id = self.data('show-value-of-' + dim + '-at') || null;
+                var user_id = self.data('show-value-of-' + name.toLowerCase() + '-at') || null;
+                if(user_id === null)
+                    user_id = self.data('show-value-of-' + dim.toLowerCase() + '-at') || null;
                 if(user_id !== null) {
                     user_element = document.getElementById(user_id) || null;
-                    if(user_element === null)
+                    if (user_element === null)
                         state.log('Cannot find element with id: ' + user_id);
                 }
 
@@ -2735,7 +2869,12 @@
             this.data_url += "&format="  + this.library.format();
             this.data_url += "&points="  + (this.data_points * points_multiplier).toString();
             this.data_url += "&group="   + this.method;
-            this.data_url += "&options=" + this.library.options(this);
+
+            if(this.override_options !== null)
+                this.data_url += "&options=" + this.override_options.toString();
+            else
+                this.data_url += "&options=" + this.library.options(this);
+
             this.data_url += '|jsonwrap';
 
             if(NETDATA.options.current.eliminate_zero_dimensions === true)
@@ -2774,7 +2913,7 @@
             this.updates_since_last_unhide++;
             this.updates_since_last_creation++;
 
-            var started = new Date().getTime();
+            var started = Date.now();
 
             // if the result is JSON, find the latest update-every
             this.data_update_every = data.view_update_every * 1000;
@@ -2852,7 +2991,7 @@
                 NETDATA.globalSelectionSync.stop();
 
             // update the performance counters
-            var now = new Date().getTime();
+            var now = Date.now();
             this.tm.last_updated = now;
 
             // don't update last_autorefreshed if this chart is
@@ -2943,6 +3082,7 @@
             })
             .done(function(data) {
                 that.xhr = undefined;
+                that.retries_on_data_failures = 0;
 
                 if(that.debug === true)
                     that.log('data received. updating chart.');
@@ -2952,8 +3092,18 @@
             .fail(function(msg) {
                 that.xhr = undefined;
 
-                if(msg.statusText !== 'abort')
-                    error('data download failed for url: ' + that.data_url);
+                if(msg.statusText !== 'abort') {
+                    that.retries_on_data_failures++;
+                    if(that.retries_on_data_failures > NETDATA.options.current.retries_on_data_failures) {
+                        // that.log('failed ' + that.retries_on_data_failures.toString() + ' times - giving up');
+                        that.retries_on_data_failures = 0;
+                        error('data download failed for url: ' + that.data_url);
+                    }
+                    else {
+                        that.tm.last_autorefreshed = Date.now();
+                        // that.log('failed ' + that.retries_on_data_failures.toString() + ' times, but I will retry');
+                    }
+                }
             })
             .always(function() {
                 that.xhr = undefined;
@@ -2977,7 +3127,7 @@
             if(nocache === false && this.tm.last_visible_check > NETDATA.options.last_page_scroll)
                 return this.___isVisible___;
 
-            this.tm.last_visible_check = new Date().getTime();
+            this.tm.last_visible_check = Date.now();
 
             var wh = window.innerHeight;
             var x = this.element.getBoundingClientRect();
@@ -3020,7 +3170,7 @@
         };
 
         this.canBeAutoRefreshed = function() {
-            var now = new Date().getTime();
+            var now = Date.now();
 
             if(this.running === true) {
                 if(this.debug === true)
@@ -3141,7 +3291,7 @@
             this.chart_url = chart.url;
             this.data_update_every = chart.update_every * 1000;
             this.data_points = Math.round(this.chartWidth() / this.chartPixelsPerPoint());
-            this.tm.last_info_downloaded = new Date().getTime();
+            this.tm.last_info_downloaded = Date.now();
 
             if(this.title === null)
                 this.title = chart.title;
@@ -3491,7 +3641,7 @@
     };
 
     NETDATA.parseDom = function(callback) {
-        NETDATA.options.last_page_scroll = new Date().getTime();
+        NETDATA.options.last_page_scroll = Date.now();
         NETDATA.options.updated_dom = false;
 
         var targets = $('div[data-netdata]'); //.filter(':visible');
@@ -3890,23 +4040,31 @@
                 state.log('dygraphChartUpdate() forced zoom update');
 
             options.dateWindow = (state.requested_padding !== null)?[ state.view_after, state.view_before ]:null;
-            options.valueRange = state.dygraph_options.valueRange;
             options.isZoomedIgnoreProgrammaticZoom = true;
             state.dygraph_force_zoom = false;
         }
         else if(state.current.name !== 'auto') {
             if(NETDATA.options.debug.dygraph === true || state.debug === true)
                 state.log('dygraphChartUpdate() loose update');
-
-            options.valueRange = state.dygraph_options.valueRange;
         }
         else {
             if(NETDATA.options.debug.dygraph === true || state.debug === true)
                 state.log('dygraphChartUpdate() strict update');
 
             options.dateWindow = (state.requested_padding !== null)?[ state.view_after, state.view_before ]:null;
-            options.valueRange = state.dygraph_options.valueRange;
             options.isZoomedIgnoreProgrammaticZoom = true;
+        }
+
+        options.valueRange = state.dygraph_options.valueRange;
+
+        var oldMax = null, oldMin = null;
+        if(state.__commonMin !== null) {
+            state.data.min = state.dygraph_instance.axes_[0].extremeRange[0];
+            oldMin = options.valueRange[0] = NETDATA.commonMin.get(state);
+        }
+        if(state.__commonMax !== null) {
+            state.data.max = state.dygraph_instance.axes_[0].extremeRange[1];
+            oldMax = options.valueRange[1] = NETDATA.commonMax.get(state);
         }
 
         if(state.dygraph_smooth_eligible === true) {
@@ -3919,7 +4077,24 @@
 
         dygraph.updateOptions(options);
 
-        state.dygraph_last_rendered = new Date().getTime();
+        var redraw = false;
+        if(oldMin !== null && oldMin > state.dygraph_instance.axes_[0].extremeRange[0]) {
+            state.data.min = state.dygraph_instance.axes_[0].extremeRange[0];
+            options.valueRange[0] = NETDATA.commonMin.get(state);
+            redraw = true;
+        }
+        if(oldMax !== null && oldMax < state.dygraph_instance.axes_[0].extremeRange[1]) {
+            state.data.max = state.dygraph_instance.axes_[0].extremeRange[1];
+            options.valueRange[1] = NETDATA.commonMax.get(state);
+            redraw = true;
+        }
+
+        if(redraw === true) {
+            // state.log('forcing redraw to adapt to common- min/max');
+            dygraph.updateOptions(options);
+        }
+
+        state.dygraph_last_rendered = Date.now();
         return true;
     };
 
@@ -3953,7 +4128,7 @@
             title: self.data('dygraph-title') || state.title,
             titleHeight: self.data('dygraph-titleheight') || 19,
 
-            legend: self.data('dygraph-legend') || 'always', // 'onmouseover',
+            legend: self.data('dygraph-legend') || 'always', // we need this to get selection events
             labels: data.result.labels,
             labelsDiv: self.data('dygraph-labelsdiv') || state.element_legend_childs.hidden,
             labelsDivStyles: self.data('dygraph-labelsdivstyles') || { 'fontSize':'1px' },
@@ -3969,7 +4144,7 @@
             xRangePad: self.data('dygraph-xrangepad') || 0,
             yRangePad: self.data('dygraph-yrangepad') || 1,
 
-            valueRange: self.data('dygraph-valuerange') || null,
+            valueRange: self.data('dygraph-valuerange') || [ null, null ],
 
             ylabel: state.units,
             yLabelWidth: self.data('dygraph-ylabelwidth') || 12,
@@ -4006,11 +4181,11 @@
             drawAxis: self.data('dygraph-drawaxis') || true,
             axisLabelFontSize: self.data('dygraph-axislabelfontsize') || 10,
             axisLineColor: self.data('dygraph-axislinecolor') || NETDATA.themes.current.axis,
-            axisLineWidth: self.data('dygraph-axislinewidth') || 0.3,
+            axisLineWidth: self.data('dygraph-axislinewidth') || 1.0,
 
             drawGrid: self.data('dygraph-drawgrid') || true,
             gridLinePattern: self.data('dygraph-gridlinepattern') || null,
-            gridLineWidth: self.data('dygraph-gridlinewidth') || 0.4,
+            gridLineWidth: self.data('dygraph-gridlinewidth') || 1.0,
             gridLineColor: self.data('dygraph-gridlinecolor') || NETDATA.themes.current.grid,
 
             maxNumberWidth: self.data('dygraph-maxnumberwidth') || 8,
@@ -4171,6 +4346,7 @@
                         state.globalSelectionSyncStop();
                         state.globalSelectionSyncDelay();
                         state.setMode('pan');
+                        context.is2DPan = false;
                         Dygraph.movePan(event, dygraph, context);
                     }
                     else if(context.isZooming) {
@@ -4207,9 +4383,9 @@
                         state.log('interactionModel.dblclick()');
                     NETDATA.resetAllCharts(state);
                 },
-                mousewheel: function(event, dygraph, context) {
+                wheel: function(event, dygraph, context) {
                     if(NETDATA.options.debug.dygraph === true || state.debug === true)
-                        state.log('interactionModel.mousewheel()');
+                        state.log('interactionModel.wheel()');
 
                     // Take the offset of a mouse event on the dygraph canvas and
                     // convert it to a pair of percentages from the bottom left.
@@ -4277,7 +4453,15 @@
                         state.globalSelectionSyncDelay();
 
                         // http://dygraphs.com/gallery/interaction-api.js
-                        var normal = (event.detail) ? event.detail * -1 : event.wheelDelta / 40;
+                        var normal_def;
+                        if(typeof event.wheelDelta === 'number' && event.wheelDelta != NaN)
+                            // chrome
+                            normal_def = event.wheelDelta / 40;
+                        else
+                            // firefox
+                            normal_def = event.deltaY * -1.2;
+
+                        var normal = (event.detail) ? event.detail * -1 : normal_def;
                         var percentage = normal / 50;
 
                         if (!(event.offsetX && event.offsetY)){
@@ -4290,7 +4474,6 @@
                         var yPct = percentages[1];
 
                         var new_x_range = zoomRange(dygraph, percentage, xPct, yPct);
-
                         var after = new_x_range[0];
                         var before = new_x_range[1];
 
@@ -4326,7 +4509,7 @@
                     // the internal default of dygraphs
                     context.touchDirections = { x: true, y: false };
 
-                    state.dygraph_last_touch_start = new Date().getTime();
+                    state.dygraph_last_touch_start = Date.now();
                     state.dygraph_last_touch_move = 0;
 
                     if(typeof event.touches[0].pageX === 'number')
@@ -4341,7 +4524,7 @@
                     state.dygraph_user_action = true;
                     Dygraph.defaultInteractionModel.touchmove(event, dygraph, context);
 
-                    state.dygraph_last_touch_move = new Date().getTime();
+                    state.dygraph_last_touch_move = Date.now();
                 },
                 touchend: function(event, dygraph, context) {
                     if(NETDATA.options.debug.dygraph === true || state.debug === true)
@@ -4360,7 +4543,7 @@
                     }
 
                     // if it was double tap within double click time, reset the charts
-                    var now = new Date().getTime();
+                    var now = Date.now();
                     if(typeof state.dygraph_last_touch_end !== 'undefined') {
                         if(state.dygraph_last_touch_move === 0) {
                             var dt = now - state.dygraph_last_touch_end;
@@ -4401,7 +4584,18 @@
 
         state.dygraph_force_zoom = false;
         state.dygraph_user_action = false;
-        state.dygraph_last_rendered = new Date().getTime();
+        state.dygraph_last_rendered = Date.now();
+
+        if(typeof state.dygraph_instance.axes_[0].extremeRange !== 'undefined') {
+            state.__commonMin = self.data('common-min') || null;
+            state.__commonMax = self.data('common-max') || null;
+        }
+        else {
+            state.log('incompatible version of dygraphs detected');
+            state.__commonMin = null;
+            state.__commonMax = null;
+        }
+
         return true;
     };
 
@@ -4822,14 +5016,28 @@
 
     // ----------------------------------------------------------------------------------------------------------------
 
-    NETDATA.percentFromValueMax = function(value, max) {
-        if(value === null) value = 0;
+    NETDATA.easypiechartPercentFromValueMinMax = function(value, min, max) {
+        if(typeof value !== 'number') value = 0;
+        if(typeof min !== 'number') min = 0;
+        if(typeof max !== 'number') max = 0;
+
+        if(min > value) min = value;
         if(max < value) max = value;
 
+        // make sure it is zero based
+        if(min > 0) min = 0;
+        if(max < 0) max = 0;
+
         var pcent = 0;
-        if(max !== 0) {
-            pcent = Math.round(value * 100 / max);
-            if(pcent === 0 && value > 0) pcent = 1;
+        if(value >= 0) {
+            if(max !== 0)
+                pcent = Math.round(value * 100 / max);
+            if(pcent === 0) pcent = 0.1;
+        }
+        else {
+            if(min !== 0)
+                pcent = Math.round(-value * 100 / min);
+            if(pcent === 0) pcent = -0.1;
         }
 
         return pcent;
@@ -4902,8 +5110,9 @@
         }
 
         var value = state.data.result[state.data.result.length - 1 - slot];
-        var max = (state.easyPieChartMax === null)?state.data.max:state.easyPieChartMax;
-        var pcent = NETDATA.percentFromValueMax(value, max);
+        var min = (state.easyPieChartMin === null)?NETDATA.commonMin.get(state):state.easyPieChartMin;
+        var max = (state.easyPieChartMax === null)?NETDATA.commonMax.get(state):state.easyPieChartMax;
+        var pcent = NETDATA.easypiechartPercentFromValueMinMax(value, min, max);
 
         state.easyPieChartEvent.value = value;
         state.easyPieChartEvent.pcent = pcent;
@@ -4922,17 +5131,17 @@
     };
 
     NETDATA.easypiechartChartUpdate = function(state, data) {
-        var value, max, pcent;
+        var value, min, max, pcent;
 
         if(NETDATA.globalPanAndZoom.isActive() === true || state.isAutoRefreshable() === false) {
             value = null;
-            max = 0;
             pcent = 0;
         }
         else {
             value = data.result[0];
-            max = (state.easyPieChartMax === null)?data.max:state.easyPieChartMax;
-            pcent = NETDATA.percentFromValueMax(value, max);
+            min = (state.easyPieChartMin === null)?NETDATA.commonMin.get(state):state.easyPieChartMin;
+            max = (state.easyPieChartMax === null)?NETDATA.commonMax.get(state):state.easyPieChartMax;
+            pcent = NETDATA.easypiechartPercentFromValueMinMax(value, min, max);
         }
 
         state.easyPieChartLabel.innerHTML = state.legendFormatValue(value);
@@ -4945,17 +5154,25 @@
         var chart = $(state.element_chart);
 
         var value = data.result[0];
+        var min = self.data('easypiechart-min-value') || null;
         var max = self.data('easypiechart-max-value') || null;
         var adjust = self.data('easypiechart-adjust') || null;
 
+        if(min === null) {
+            min = NETDATA.commonMin.get(state);
+            state.easyPieChartMin = null;
+        }
+        else
+            state.easyPieChartMin = min;
+
         if(max === null) {
-            max = data.max;
+            max = NETDATA.commonMax.get(state);
             state.easyPieChartMax = null;
         }
         else
             state.easyPieChartMax = max;
 
-        var pcent = NETDATA.percentFromValueMax(value, max);
+        var pcent = NETDATA.easypiechartPercentFromValueMinMax(value, min, max);
 
         chart.data('data-percent', pcent);
 
@@ -5021,7 +5238,7 @@
             trackWidth: self.data('easypiechart-trackwidth') || undefined,
             size: self.data('easypiechart-size') || size,
             rotate: self.data('easypiechart-rotate') || 0,
-            animate: self.data('easypiechart-rotate') || {duration: 500, enabled: true},
+            animate: self.data('easypiechart-animate') || {duration: 500, enabled: true},
             easing: self.data('easypiechart-easing') || undefined
         });
 
@@ -5171,12 +5388,16 @@
         }
 
         var value = state.data.result[state.data.result.length - 1 - slot];
-        var max = (state.gaugeMax === null)?state.data.max:state.gaugeMax;
-        var min = 0;
+        var min = (state.gaugeMin === null)?NETDATA.commonMin.get(state):state.gaugeMin;
+        var max = (state.gaugeMax === null)?NETDATA.commonMax.get(state):state.gaugeMax;
+
+        // make sure it is zero based
+        if(min > 0) min = 0;
+        if(max < 0) max = 0;
 
         state.gaugeEvent.value = value;
-        state.gaugeEvent.max = max;
         state.gaugeEvent.min = min;
+        state.gaugeEvent.max = max;
         NETDATA.gaugeSetLabels(state, value, min, max);
 
         if(state.gaugeEvent.timer === null) {
@@ -5202,9 +5423,15 @@
         }
         else {
             value = data.result[0];
-            min = 0;
-            max = (state.gaugeMax === null)?data.max:state.gaugeMax;
+            min = (state.gaugeMin === null)?NETDATA.commonMin.get(state):state.gaugeMin;
+            max = (state.gaugeMax === null)?NETDATA.commonMax.get(state):state.gaugeMax;
+            if(value < min) min = value;
             if(value > max) max = value;
+
+            // make sure it is zero based
+            if(min > 0) min = 0;
+            if(max < 0) max = 0;
+
             NETDATA.gaugeSetLabels(state, value, min, max);
         }
 
@@ -5217,6 +5444,7 @@
         // var chart = $(state.element_chart);
 
         var value = data.result[0];
+        var min = self.data('gauge-min-value') || null;
         var max = self.data('gauge-max-value') || null;
         var adjust = self.data('gauge-adjust') || null;
         var pointerColor = self.data('gauge-pointer-color') || NETDATA.themes.current.gauge_pointer;
@@ -5225,12 +5453,23 @@
         var stopColor = self.data('gauge-stop-color') || void 0;
         var generateGradient = self.data('gauge-generate-gradient') || false;
 
+        if(min === null) {
+            min = NETDATA.commonMin.get(state);
+            state.gaugeMin = null;
+        }
+        else
+            state.gaugeMin = min;
+
         if(max === null) {
-            max = data.max;
+            max = NETDATA.commonMax.get(state);
             state.gaugeMax = null;
         }
         else
             state.gaugeMax = max;
+
+        // make sure it is zero based
+        if(min > 0) min = 0;
+        if(max < 0) max = 0;
 
         var width = state.chartWidth(), height = state.chartHeight(); //, ratio = 1.5;
         //switch(adjust) {
@@ -5349,7 +5588,7 @@
 
         state.___gaugeOld__ = {
             value: value,
-            min: 0,
+            min: min,
             max: max,
             valueLabel: null,
             minLabel: null,
@@ -5361,8 +5600,8 @@
         state.gauge_instance.maxValue = 100;
 
         NETDATA.gaugeAnimation(state, animate);
-        NETDATA.gaugeSet(state, value, 0, max);
-        NETDATA.gaugeSetLabels(state, value, 0, max);
+        NETDATA.gaugeSet(state, value, min, max);
+        NETDATA.gaugeSetLabels(state, value, min, max);
         NETDATA.gaugeAnimation(state, true);
         return true;
     };
@@ -5624,7 +5863,7 @@
             }
         },
         {
-            url: NETDATA.serverDefault + 'css/font-awesome.min.css?v4.6.3',
+            url: NETDATA.serverDefault + 'css/font-awesome.min.css?v4.7.0',
             isAlreadyLoaded: function() { return false; }
         },
         {
@@ -6041,7 +6280,7 @@
                 NETDATA.registry.machines = {};
                 NETDATA.registry.machines_array = new Array();
 
-                var now = new Date().getTime();
+                var now = Date.now();
                 var apu = person_urls;
                 var i = apu.length;
                 while(i--) {

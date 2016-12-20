@@ -20,7 +20,9 @@
 
 #else /* !defined(ENABLE_JEMALLOC) && !defined(ENABLE_TCMALLOC) */
 
+#ifndef __FreeBSD__
 #include <malloc.h>
+#endif /* __FreeBSD__ */
 
 #endif
 
@@ -52,7 +54,9 @@
 #include <signal.h>
 #include <syslog.h>
 #include <sys/mman.h>
+#ifndef __FreeBSD__
 #include <sys/prctl.h>
+#endif /* __FreeBSD__ */
 #include <sys/resource.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -64,6 +68,10 @@
 #include <time.h>
 #include <unistd.h>
 #include <uuid/uuid.h>
+
+/*
+#include <mntent.h>
+*/
 
 #ifdef STORAGE_WITH_MATH
 #include <math.h>
@@ -92,6 +100,7 @@
 #endif // __GNUC__
 
 #include "avl.h"
+#include "clocks.h"
 #include "log.h"
 #include "global_statistics.h"
 #include "storage_number.h"
@@ -107,7 +116,11 @@
 #include "plugin_checks.h"
 #include "plugin_idlejitter.h"
 #include "plugin_nfacct.h"
+#ifndef __FreeBSD__
 #include "plugin_proc.h"
+#else
+#include "plugin_freebsd.h"
+#endif /* __FreeBSD__ */
 #include "plugin_tc.h"
 #include "plugins_d.h"
 
@@ -125,15 +138,13 @@
 #include "main.h"
 #include "unit_test.h"
 
+#include "ipc.h"
+#include "backends.h"
+
 #ifdef abs
 #undef abs
 #endif
 #define abs(x) ((x < 0)? -x : x)
-
-extern unsigned long long usec_dt(struct timeval *now, struct timeval *old);
-extern unsigned long long timeval_usec(struct timeval *tv);
-
-// #define usec_dt(now, last) (((((now)->tv_sec * 1000000ULL) + (now)->tv_usec) - (((last)->tv_sec * 1000000ULL) + (last)->tv_usec)))
 
 extern void netdata_fix_chart_id(char *s);
 extern void netdata_fix_chart_name(char *s);
@@ -170,6 +181,8 @@ extern void *reallocz(void *ptr, size_t size);
 extern void freez(void *ptr);
 #endif
 
+extern void json_escape_string(char *dst, const char *src, size_t size);
+
 extern void *mymmap(const char *filename, size_t size, int flags, int ksm);
 extern int savememory(const char *filename, void *mem, size_t size);
 
@@ -180,8 +193,7 @@ extern int enable_ksm;
 
 extern pid_t gettid(void);
 
-extern unsigned long long time_usec(void);
-extern int sleep_usec(unsigned long long usec);
+extern int sleep_usec(usec_t usec);
 
 extern char *fgets_trim_len(char *buf, size_t buf_size, FILE *fp, size_t *len);
 
